@@ -11,8 +11,12 @@ Deux modes d'exécution :
 
 Sources :
   - Google News RSS, interrogé avec des requêtes ciblées (thème x zone)
+  - https://www.lasemaine.fr/category/economie
+  - https://www.lejournaldesentreprises.com/secteurs-activite/industrie?edition=/grand-est
+  - https://www.societe.tech/actualite-entreprises-grand-est
   - BODACC (API officielle DILA/data.gouv.fr) pour les procédures collectives,
     cessions et créations dans les départements du Grand Est
+  - https://www.tracesecritesnews.fr/actualite/region/grand-est-4
 
 Sortie :
   - un fichier HTML (docs/index.html) pensé pour être publié via GitHub Pages
@@ -99,6 +103,10 @@ BODACC_API = "https://bodacc-datadila.opendatasoft.com/api/explore/v2.1/catalog/
 # régionales/locales par nature.
 SOURCES_SPECIALISEES = {
     "Les Affiches d'Alsace et de Lorraine": "affiches-moniteur.com",
+    "https://www.lasemaine.fr/category/economie",
+    "https://www.lejournaldesentreprises.com/secteurs-activite/industrie?edition=/grand-est",
+    "https://www.societe.tech/actualite-entreprises-grand-est",
+    "- https://www.tracesecritesnews.fr/actualite/region/grand-est-4",
     "Point Éco Alsace": "pointecoalsace.fr",
     "Le Journal des Entreprises (Grand Est)": "lejournaldesentreprises.com",
     "Paperjam (Luxembourg)": "paperjam.lu",
