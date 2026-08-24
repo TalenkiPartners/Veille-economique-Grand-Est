@@ -11,12 +11,12 @@ Deux modes d'exécution :
 
 Sources :
   - Google News RSS, interrogé avec des requêtes ciblées (thème x zone)
-  - https://www.lasemaine.fr/category/economie
-  - https://www.lejournaldesentreprises.com/secteurs-activite/industrie?edition=/grand-est
-  - https://www.societe.tech/actualite-entreprises-grand-est
+  - Sources spécialisées via Google News restreint au domaine (La Semaine,
+    Le Journal des Entreprises, Société.tech, Traces Écrites News,
+    Les Affiches d'Alsace et de Lorraine, Point Éco Alsace, Paperjam, Delano)
+  - L'essentiel (Luxembourg), flux RSS direct
   - BODACC (API officielle DILA/data.gouv.fr) pour les procédures collectives,
-    cessions et créations dans les départements du Grand Est
-  - https://www.tracesecritesnews.fr/actualite/region/grand-est-4
+    cessions et créations dans les départements couverts
 
 Sortie :
   - un fichier HTML (docs/index.html) pensé pour être publié via GitHub Pages
@@ -66,7 +66,6 @@ ZONES = [
     "Sarreguemines",
     "Verdun",
     "Châlons-en-Champagne",
-    "Luxembourg",
     "Franche-Comté",
     "Bourgogne",
     "Belfort",
@@ -74,8 +73,8 @@ ZONES = [
     "Montbéliard",
 ]
 
-# Départements du Grand Est pour le filtrage BODACC (codes INSEE).
-DEPARTEMENTS_GRAND_EST = ["08", "10", "51", "52", "54", "55", "57", "67", "68", "88", "25", "90","70", "21"]
+# Départements couverts pour le filtrage BODACC (codes INSEE).
+DEPARTEMENTS_GRAND_EST = ["08", "10", "51", "52", "54", "55", "57", "67", "68", "88", "25", "90", "70", "21"]
 
 # Thématiques suivies. Chaque valeur est une liste de synonymes/variantes
 # combinés en OR dans la requête.
@@ -101,14 +100,14 @@ BODACC_API = "https://bodacc-datadila.opendatasoft.com/api/explore/v2.1/catalog/
 # Sources spécialisées interrogées via Google News restreint au domaine
 # (site:xxx), sans exigence de zone puisque ces sources sont déjà
 # régionales/locales par nature.
+# Format : "Nom affiché": "domaine.tld"  (domaine seul, sans https://www. ni chemin)
 SOURCES_SPECIALISEES = {
     "Les Affiches d'Alsace et de Lorraine": "affiches-moniteur.com",
-    "https://www.lasemaine.fr/category/economie",
-    "https://www.lejournaldesentreprises.com/secteurs-activite/industrie?edition=/grand-est",
-    "https://www.societe.tech/actualite-entreprises-grand-est",
-    "- https://www.tracesecritesnews.fr/actualite/region/grand-est-4",
-    "Point Éco Alsace": "pointecoalsace.fr",
+    "La Semaine": "lasemaine.fr",
     "Le Journal des Entreprises (Grand Est)": "lejournaldesentreprises.com",
+    "Société.tech": "societe.tech",
+    "Traces Écrites News": "tracesecritesnews.fr",
+    "Point Éco Alsace": "pointecoalsace.fr",
     "Paperjam (Luxembourg)": "paperjam.lu",
     "Delano (Luxembourg)": "delano.lu",
 }
@@ -149,7 +148,7 @@ def fetch_google_news(theme_keywords, zone, since):
 
 def fetch_bodacc(since):
     """Récupère les annonces BODACC (procédures collectives, cessions,
-    créations) pour les départements du Grand Est depuis `since`."""
+    créations) pour les départements couverts depuis `since`."""
     items = []
     dept_clause = " or ".join(f'departement="{d}"' for d in DEPARTEMENTS_GRAND_EST)
     date_str = since.strftime("%Y-%m-%d")
@@ -288,16 +287,37 @@ def _filter_sector(items):
 
 
 def _dedupe(items):
-    seen_titles = set()
-    unique = []
+    """Déduplique par similarité de titre (pas seulement égalité stricte),
+    pour repérer le même événement raconté différemment par deux sources."""
+    import difflib
+    import re
+
+    def normalize(title):
+        t = title.lower().strip()
+        t = re.sub(r"[^\w\s]", " ", t)
+        t = re.sub(r"\s+", " ", t)
+        return t
+
+    items = sorted(
+        items,
+        key=lambda i: i["published"] or datetime.min.replace(tzinfo=timezone.utc),
+        reverse=True,
+    )
+
+    kept = []
+    kept_normalized = []
     for item in items:
-        key = item["title"].strip().lower()
-        if key in seen_titles:
+        norm = normalize(item["title"])
+        is_duplicate = any(
+            difflib.SequenceMatcher(None, norm, other).ratio() > 0.72
+            for other in kept_normalized
+        )
+        if is_duplicate:
             continue
-        seen_titles.add(key)
-        unique.append(item)
-    unique.sort(key=lambda i: i["published"] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
-    return unique
+        kept.append(item)
+        kept_normalized.append(norm)
+
+    return kept
 
 
 def _parse_date(value):
