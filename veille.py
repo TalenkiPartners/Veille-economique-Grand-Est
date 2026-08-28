@@ -85,12 +85,33 @@ THEMES = {
     "Rachats / cessions": ["rachat", "acquisition", "cession d'entreprise", "reprise d'activité"],
 }
 
-# Filtre sectoriel : au moins un de ces mots doit apparaître pour qu'un
-# article soit retenu (filtre appliqué après récupération, sur titre+résumé).
+# Filtre sectoriel : un article passe s'il contient au moins un mot de cette
+# liste OU le nom d'une entreprise-repère (liste juste en dessous). Beaucoup
+# d'articles industriels ne disent jamais "industrie" ou "usine" — ils citent
+# juste le nom de l'entreprise — d'où l'intérêt de la seconde liste.
 SECTEURS = [
     "industrie", "industriel", "usine", "ingénierie", "énergie", "énergétique",
     "métallurgie", "automobile", "aéronautique", "production", "manufactur",
     "mécanique", "fonderie", "sidérurgie", "hydrogène", "nucléaire",
+    "chimie", "chimique", "plasturgie", "verre", "papier", "carton",
+    "agroalimentaire", "textile", "semi-conducteur", "batterie", "éolien",
+    "solaire", "photovoltaïque", "décarbonation", "sous-traitance",
+    "site de production", "unité de production", "chaîne de production",
+    "robotique", "automatisation", "maintenance industrielle",
+    "bureau d'études", "forge", "emboutissage", "injection plastique",
+    "ferroviaire", "construction navale", "spatial", "logistique industrielle",
+]
+
+# Entreprises-repères de l'industrie Grand Est : si l'une d'elles est citée,
+# l'article est retenu même sans mot-clé sectoriel générique. Liste à
+# compléter librement au fil de l'eau selon ce que tu observes manquer.
+ENTREPRISES_SURVEILLANCE = [
+    "Stellantis", "ArcelorMittal", "Renault", "SOVAB", "Schaeffler",
+    "Bugatti", "Ineos", "Smart", "Punch Powerglide", "Clemessy",
+    "Alstom", "Siemens", "Vallourec", "De Dietrich", "SEW-Usocome",
+    "Liebherr", "Lohr", "Continental", "Faurecia", "Vitesco",
+    "Safran", "Thales", "Air Liquide", "Solvay", "Arkema",
+    "TotalEnergies", "GRTgaz", "EDF", "Bosch",
 ]
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search?q={query}&hl=fr&gl=FR&ceid=FR:fr"
@@ -114,6 +135,19 @@ SOURCES_SPECIALISEES = {
 
 # Flux RSS direct de L'essentiel (Luxembourg), rubrique économie.
 LESSENTIEL_RSS = "https://partner-feeds.lessentiel.lu/rss/lessentiel-fr/economie"
+
+# API officielle, gratuite, sans clé (agrège le registre SIRENE de l'INSEE).
+# Permet de filtrer les entreprises directement par département et code/
+# section NAF — précision qu'aucune recherche par mots-clés ne peut égaler.
+RECHERCHE_ENTREPRISES_API = "https://recherche-entreprises.api.gouv.fr/search"
+
+# Filtres NAF appliqués : sections (lettre) ou codes précis (chiffres).
+# C = Industrie manufacturière, D = Énergie, 71.12B = Ingénierie/études techniques.
+NAF_CIBLES = [
+    {"label": "Industrie manufacturière", "section_activite_principale": "C"},
+    {"label": "Énergie", "section_activite_principale": "D"},
+    {"label": "Ingénierie / études techniques", "code_naf": "71.12B"},
+]
 
 # ---------------------------------------------------------------------------
 # Collecte
@@ -150,11 +184,11 @@ def fetch_bodacc(since):
     """Récupère les annonces BODACC (procédures collectives, cessions,
     créations) pour les départements couverts depuis `since`."""
     items = []
-    dept_clause = " or ".join(f'departement="{d}"' for d in DEPARTEMENTS_GRAND_EST)
+    dept_list = ",".join(f'"{d}"' for d in DEPARTEMENTS_GRAND_EST)
     date_str = since.strftime("%Y-%m-%d")
 
     params = {
-        "where": f"({dept_clause}) and dateparution >= date'{date_str}'",
+        "where": f"departement in ({dept_list}) and dateparution >= date'{date_str}'",
         "limit": 50,
         "order_by": "dateparution desc",
     }
@@ -235,6 +269,44 @@ def fetch_lessentiel(since):
     return items
 
 
+def fetch_entreprises_naf(since):
+    """Interroge l'API Recherche d'Entreprises (registre SIRENE), filtrée
+    par département et par code/section NAF. Contrairement à Google News,
+    cette source classe réellement les entreprises par activité officielle
+    — aucune ambiguïté de mots-clés. Elle reflète l'état actuel du registre
+    (pas un flux d'actualités daté), d'où l'absence de filtre `since` réel :
+    le paramètre est gardé pour cohérence d'appel mais n'est pas utilisé
+    pour l'instant, faute de filtre de date fiable et documenté sur cette API."""
+    items = []
+    dept_param = ",".join(DEPARTEMENTS_GRAND_EST)
+
+    for cible in NAF_CIBLES:
+        params = {"departement": dept_param, "per_page": 25}
+        params.update({k: v for k, v in cible.items() if k != "label"})
+
+        try:
+            resp = requests.get(RECHERCHE_ENTREPRISES_API, params=params, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+            for res in data.get("results", []):
+                nom = res.get("nom_complet") or res.get("nom_raison_sociale") or "Entreprise non identifiée"
+                siege = res.get("siege", {}) or {}
+                adresse = siege.get("adresse", "")
+                naf = siege.get("activite_principale", "")
+                items.append({
+                    "title": f"{nom} — {adresse} (NAF {naf})",
+                    "link": f"https://annuaire-entreprises.data.gouv.fr/entreprise/{res.get('siren', '')}",
+                    "source": f"Annuaire des Entreprises — {cible['label']}",
+                    "published": None,
+                    "summary": "",
+                    "zone": adresse,
+                })
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] échec Recherche d'Entreprises ({cible['label']}): {exc}", file=sys.stderr)
+
+    return items
+
+
 def collect(mode):
     """Lance la collecte complète selon le mode (daily/weekly)."""
     now = datetime.now(timezone.utc)
@@ -256,6 +328,7 @@ def collect(mode):
 
     all_items.extend(_tag_theme(fetch_lessentiel(since), "Actualité générale (L'essentiel)"))
     all_items.extend(_tag_theme(fetch_bodacc(since), "Procédures / annonces légales (BODACC)"))
+    all_items.extend(_tag_theme(fetch_entreprises_naf(since), "Entreprises identifiées par code NAF"))
 
     return _dedupe(_filter_sector(all_items))
 
@@ -272,16 +345,20 @@ def _tag_theme(items, theme_label):
 
 def _filter_sector(items):
     """Ne garde que les items dont le titre ou le résumé évoque un des
-    secteurs suivis. Les items BODACC sont conservés tels quels car déjà
+    secteurs suivis, OU cite une entreprise-repère de la liste de
+    surveillance. Les items BODACC sont conservés tels quels car déjà
     filtrés par zone géographique (le filtrage sectoriel fin y est plus
     difficile sans NAF détaillé)."""
     kept = []
     for item in items:
-        if item["source"] == "BODACC":
+        if item["source"] == "BODACC" or item["source"].startswith("Annuaire des Entreprises"):
             kept.append(item)
             continue
         text = f"{item['title']} {item['summary']}".lower()
         if any(sect in text for sect in SECTEURS):
+            kept.append(item)
+            continue
+        if any(entreprise.lower() in text for entreprise in ENTREPRISES_SURVEILLANCE):
             kept.append(item)
     return kept
 
