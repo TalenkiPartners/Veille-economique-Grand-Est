@@ -141,13 +141,9 @@ LESSENTIEL_RSS = "https://partner-feeds.lessentiel.lu/rss/lessentiel-fr/economie
 # section NAF — précision qu'aucune recherche par mots-clés ne peut égaler.
 RECHERCHE_ENTREPRISES_API = "https://recherche-entreprises.api.gouv.fr/search"
 
-# Filtres NAF appliqués : sections (lettre) ou codes précis (chiffres).
-# C = Industrie manufacturière, D = Énergie, 71.12B = Ingénierie/études techniques.
-NAF_CIBLES = [
-    {"label": "Industrie manufacturière", "section_activite_principale": "C"},
-    {"label": "Énergie", "section_activite_principale": "D"},
-    {"label": "Ingénierie / études techniques", "code_naf": "71.12B"},
-]
+# Divisions NAF ciblées pour le rapprochement : 10-33 = industrie
+# manufacturière, 35 = énergie, 71.12 = ingénierie / études techniques.
+# (voir naf_matches_cible() pour la logique de correspondance)
 
 # ---------------------------------------------------------------------------
 # Collecte
@@ -210,6 +206,7 @@ def fetch_bodacc(since):
                 "published": _parse_date(date_parution),
                 "summary": rec.get("texte") or "",
                 "zone": ville or dept,
+                "_entreprise_nom": nom,
             })
     except Exception as exc:  # noqa: BLE001
         print(f"[warn] échec BODACC: {exc}", file=sys.stderr)
@@ -269,42 +266,49 @@ def fetch_lessentiel(since):
     return items
 
 
-def fetch_entreprises_naf(since):
-    """Interroge l'API Recherche d'Entreprises (registre SIRENE), filtrée
-    par département et par code/section NAF. Contrairement à Google News,
-    cette source classe réellement les entreprises par activité officielle
-    — aucune ambiguïté de mots-clés. Elle reflète l'état actuel du registre
-    (pas un flux d'actualités daté), d'où l'absence de filtre `since` réel :
-    le paramètre est gardé pour cohérence d'appel mais n'est pas utilisé
-    pour l'instant, faute de filtre de date fiable et documenté sur cette API."""
-    items = []
-    dept_param = ",".join(DEPARTEMENTS_GRAND_EST)
+def naf_matches_cible(code_naf):
+    """Vérifie si un code NAF appartient aux secteurs ciblés : industrie
+    manufacturière (divisions 10 à 33), énergie (division 35), ingénierie /
+    études techniques (code 71.12)."""
+    if not code_naf:
+        return False
+    code = code_naf.replace(".", "").upper()
+    if code.startswith("7112"):
+        return True
+    division = code[:2]
+    if division.isdigit():
+        div_num = int(division)
+        if div_num == 35 or 10 <= div_num <= 33:
+            return True
+    return False
 
-    for cible in NAF_CIBLES:
-        params = {"departement": dept_param, "per_page": 25}
-        params.update({k: v for k, v in cible.items() if k != "label"})
 
-        try:
-            resp = requests.get(RECHERCHE_ENTREPRISES_API, params=params, timeout=20)
-            resp.raise_for_status()
-            data = resp.json()
-            for res in data.get("results", []):
-                nom = res.get("nom_complet") or res.get("nom_raison_sociale") or "Entreprise non identifiée"
-                siege = res.get("siege", {}) or {}
-                adresse = siege.get("adresse", "")
-                naf = siege.get("activite_principale", "")
-                items.append({
-                    "title": f"{nom} — {adresse} (NAF {naf})",
-                    "link": f"https://annuaire-entreprises.data.gouv.fr/entreprise/{res.get('siren', '')}",
-                    "source": f"Annuaire des Entreprises — {cible['label']}",
-                    "published": None,
-                    "summary": "",
-                    "zone": adresse,
-                })
-        except Exception as exc:  # noqa: BLE001
-            print(f"[warn] échec Recherche d'Entreprises ({cible['label']}): {exc}", file=sys.stderr)
+def lookup_naf(company_name, cache):
+    """Cherche le code NAF réel d'une entreprise par son nom via l'API
+    Recherche d'Entreprises (registre SIRENE, officielle, gratuite, sans
+    clé). Mis en cache pour éviter les appels répétés dans une même
+    exécution si la même entreprise revient plusieurs fois."""
+    key = company_name.strip().lower()
+    if key in cache:
+        return cache[key]
 
-    return items
+    naf = None
+    try:
+        resp = requests.get(
+            RECHERCHE_ENTREPRISES_API,
+            params={"q": company_name, "per_page": 1},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        results = data.get("results", [])
+        if results:
+            naf = (results[0].get("siege", {}) or {}).get("activite_principale")
+    except Exception as exc:  # noqa: BLE001
+        print(f"[warn] échec lookup NAF pour '{company_name}': {exc}", file=sys.stderr)
+
+    cache[key] = naf
+    return naf
 
 
 def collect(mode):
@@ -328,7 +332,6 @@ def collect(mode):
 
     all_items.extend(_tag_theme(fetch_lessentiel(since), "Actualité générale (L'essentiel)"))
     all_items.extend(_tag_theme(fetch_bodacc(since), "Procédures / annonces légales (BODACC)"))
-    all_items.extend(_tag_theme(fetch_entreprises_naf(since), "Entreprises identifiées par code NAF"))
 
     return _dedupe(_filter_sector(all_items))
 
@@ -344,22 +347,69 @@ def _tag_theme(items, theme_label):
 
 
 def _filter_sector(items):
-    """Ne garde que les items dont le titre ou le résumé évoque un des
-    secteurs suivis, OU cite une entreprise-repère de la liste de
-    surveillance. Les items BODACC sont conservés tels quels car déjà
-    filtrés par zone géographique (le filtrage sectoriel fin y est plus
-    difficile sans NAF détaillé)."""
+    """Ne garde un article que si l'information est réellement exploitable
+    pour le périmètre visé :
+      - BODACC : le nom d'entreprise cité est vérifié via son vrai code NAF
+        (registre SIRENE) — on ne garde plus tout par défaut.
+      - Article citant une entreprise-repère : son code NAF réel est vérifié
+        pour confirmer qu'elle relève bien d'un secteur ciblé (une entreprise
+        peut avoir plusieurs activités ; le nom seul ne suffit pas).
+      - Sinon : on retombe sur le filtre par mots-clés génériques.
+    Le rapprochement NAF n'est possible que lorsqu'un nom d'entreprise est
+    identifiable (BODACC, ou présence d'une entreprise de la liste de
+    surveillance) — au-delà, faute d'extraction fiable du nom d'entreprise
+    dans un titre d'article quelconque, le filtre par mots-clés reste la
+    seule option.
+    """
+    import re as _re
+
+    naf_cache = {}
     kept = []
+
     for item in items:
-        if item["source"] == "BODACC" or item["source"].startswith("Annuaire des Entreprises"):
-            kept.append(item)
+        # Retire un éventuel préfixe de rubrique ("Énergie: ", "Automobile: ")
+        # qui peut faire matcher un mot-clé sectoriel sans rapport avec le
+        # contenu réel de l'article — cas fréquent sur L'essentiel, dont les
+        # titres sont préfixés par leur catégorie éditoriale.
+        titre_nettoye = _re.sub(r"^[^:]{1,40}:\s*", "", item["title"])
+        text_lower = f"{titre_nettoye} {item['summary']}".lower()
+
+        if item["source"] == "BODACC":
+            entreprise = item.get("_entreprise_nom")
+            if entreprise and entreprise != "Entreprise non identifiée":
+                naf = lookup_naf(entreprise, naf_cache)
+                if naf_matches_cible(naf):
+                    kept.append(item)
             continue
-        text = f"{item['title']} {item['summary']}".lower()
-        if any(sect in text for sect in SECTEURS):
+
+        entreprise_citee = next(
+            (e for e in ENTREPRISES_SURVEILLANCE if e.lower() in text_lower), None
+        )
+        if entreprise_citee:
+            naf = lookup_naf(entreprise_citee, naf_cache)
+            if naf_matches_cible(naf):
+                kept.append(item)
+                continue
+            # Nom non trouvé dans le registre, ou secteur hors cible : on
+            # retombe sur le filtre par mots-clés plutôt que d'écarter
+            # directement (le lookup peut échouer sans que ce soit une
+            # vraie non-pertinence).
+
+        # L'essentiel n'est pas scopé géographiquement au moment de la
+        # requête (contrairement à Google News, interrogé avec le nom de
+        # zone en dur, ou aux sources spécialisées, régionales par nature) :
+        # on exige donc explicitement une mention du Luxembourg ou d'une des
+        # zones suivies avant d'accepter un simple mot-clé sectoriel, sinon
+        # le préfixe de rubrique suffit à faire passer n'importe quelle
+        # actualité internationale.
+        if item["source"] == "L'essentiel (Luxembourg)":
+            zone_mentionnee = any(z.lower() in text_lower for z in ZONES)
+            if not zone_mentionnee:
+                continue
+
+        if any(sect in text_lower for sect in SECTEURS):
             kept.append(item)
-            continue
-        if any(entreprise.lower() in text for entreprise in ENTREPRISES_SURVEILLANCE):
-            kept.append(item)
+
     return kept
 
 
