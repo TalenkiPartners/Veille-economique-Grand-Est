@@ -178,38 +178,44 @@ def fetch_google_news(theme_keywords, zone, since):
 
 def fetch_bodacc(since):
     """Récupère les annonces BODACC (procédures collectives, cessions,
-    créations) pour les départements couverts depuis `since`."""
+    créations) pour les départements couverts depuis `since`.
+
+    Une requête simple par département plutôt qu'une clause combinée
+    (departement + date) : les tentatives précédentes avec une clause where
+    combinant plusieurs départements ET une condition de date échouaient
+    systématiquement (400 Bad Request), probablement à cause de la syntaxe
+    de comparaison de date. Le filtrage par date se fait ici côté Python,
+    après récupération — plus robuste que de deviner la bonne syntaxe ODSQL."""
     items = []
-    dept_list = ",".join(f'"{d}"' for d in DEPARTEMENTS_GRAND_EST)
-    date_str = since.strftime("%Y-%m-%d")
 
-    params = {
-        "where": f"departement in ({dept_list}) and dateparution >= date'{date_str}'",
-        "limit": 50,
-        "order_by": "dateparution desc",
-    }
-
-    try:
-        resp = requests.get(BODACC_API, params=params, timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
-        for rec in data.get("results", []):
-            nom = rec.get("registre") or rec.get("commercant") or "Entreprise non identifiée"
-            famille = rec.get("familleavis_lib") or rec.get("familleavis") or ""
-            ville = rec.get("ville") or ""
-            dept = rec.get("departement") or ""
-            date_parution = rec.get("dateparution", "")
-            items.append({
-                "title": f"[BODACC] {famille} — {nom} ({ville}, {dept})",
-                "link": "https://www.bodacc.fr/",
-                "source": "BODACC",
-                "published": _parse_date(date_parution),
-                "summary": rec.get("texte") or "",
-                "zone": ville or dept,
-                "_entreprise_nom": nom,
-            })
-    except Exception as exc:  # noqa: BLE001
-        print(f"[warn] échec BODACC: {exc}", file=sys.stderr)
+    for dept in DEPARTEMENTS_GRAND_EST:
+        params = {
+            "where": f'departement="{dept}"',
+            "limit": 20,
+            "order_by": "dateparution desc",
+        }
+        try:
+            resp = requests.get(BODACC_API, params=params, timeout=20)
+            resp.raise_for_status()
+            data = resp.json()
+            for rec in data.get("results", []):
+                published = _parse_date(rec.get("dateparution", ""))
+                if published and published < since:
+                    continue
+                nom = rec.get("registre") or rec.get("commercant") or "Entreprise non identifiée"
+                famille = rec.get("familleavis_lib") or rec.get("familleavis") or ""
+                ville = rec.get("ville") or ""
+                items.append({
+                    "title": f"[BODACC] {famille} — {nom} ({ville}, {dept})",
+                    "link": "https://www.bodacc.fr/",
+                    "source": "BODACC",
+                    "published": published,
+                    "summary": rec.get("texte") or "",
+                    "zone": ville or dept,
+                    "_entreprise_nom": nom,
+                })
+        except Exception as exc:  # noqa: BLE001
+            print(f"[warn] échec BODACC département {dept}: {exc}", file=sys.stderr)
 
     return items
 
@@ -333,7 +339,13 @@ def collect(mode):
     all_items.extend(_tag_theme(fetch_lessentiel(since), "Actualité générale (L'essentiel)"))
     all_items.extend(_tag_theme(fetch_bodacc(since), "Procédures / annonces légales (BODACC)"))
 
-    return _dedupe(_filter_sector(all_items))
+    print(f"[info] {len(all_items)} items collectés avant filtrage/dédoublonnage", file=sys.stderr)
+    apres_filtre = _filter_sector(all_items)
+    print(f"[info] {len(apres_filtre)} items après filtrage sectoriel/NAF", file=sys.stderr)
+    apres_dedupe = _dedupe(apres_filtre)
+    print(f"[info] {len(apres_dedupe)} items après dédoublonnage", file=sys.stderr)
+
+    return apres_dedupe
 
 
 # ---------------------------------------------------------------------------
