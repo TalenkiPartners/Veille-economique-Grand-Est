@@ -79,10 +79,13 @@ DEPARTEMENTS_GRAND_EST = ["08", "10", "51", "52", "54", "55", "57", "67", "68", 
 # Thématiques suivies. Chaque valeur est une liste de synonymes/variantes
 # combinés en OR dans la requête.
 THEMES = {
-    "Levées de fonds / investissements": ["levée de fonds", "investissement", "financement", "capital-risque"],
+    "Levées de fonds / investissements": ["levée de fonds", "investissement", "financement", "capital-risque", "investissement sur site"],
     "Recrutement": ["recrutement", "embauche", "création d'emplois", "plan de recrutement"],
     "Licenciements / fermetures": ["licenciement", "plan social", "PSE", "fermeture d'usine", "liquidation judiciaire"],
     "Rachats / cessions": ["rachat", "acquisition", "cession d'entreprise", "reprise d'activité"],
+    "Constructions / nouveaux sites": ["construction d'une usine", "nouveau site", "extension du site", "nouveau bâtiment", "inauguration d'usine", "transfert d'activité", "implantation"],
+    "Contrats / partenariats / commandes": ["signature d'un contrat", "partenariat", "accord de coopération", "grosse commande", "commande record", "nouveau contrat"],
+    "Brevets / R&D": ["dépôt de brevet", "brevet déposé", "innovation technologique"],
 }
 
 # Filtre sectoriel : un article passe s'il contient au moins un mot de cette
@@ -100,6 +103,9 @@ SECTEURS = [
     "robotique", "automatisation", "maintenance industrielle",
     "bureau d'études", "forge", "emboutissage", "injection plastique",
     "ferroviaire", "construction navale", "spatial", "logistique industrielle",
+    "r&d", "recherche et développement", "bâtiment", "btp", "construction",
+    "travaux publics", "pharma", "pharmaceutique", "oil & gas", "pétrole",
+    "gaz naturel", "pétrochimie", "raffinage", "industrie lourde", "cimenterie",
 ]
 
 # Entreprises-repères de l'industrie Grand Est : si l'une d'elles est citée,
@@ -111,8 +117,34 @@ ENTREPRISES_SURVEILLANCE = [
     "Alstom", "Siemens", "Vallourec", "De Dietrich", "SEW-Usocome",
     "Liebherr", "Lohr", "Continental", "Faurecia", "Vitesco",
     "Safran", "Thales", "Air Liquide", "Solvay", "Arkema",
-    "TotalEnergies", "GRTgaz", "EDF", "Bosch",
+    "TotalEnergies", "GRTgaz", "EDF", "Bosch", "Sanofi", "Novartis",
+    "Vinci", "Bouygues", "Eiffage", "SNCF",
 ]
+
+# Correspondance division NAF -> libellé de secteur affiché dans le mail.
+# Clé = préfixe de division (2 chiffres, ou 4 pour un code précis comme
+# l'ingénierie), valeur = libellé lisible.
+NAF_LABELS = {
+    "06": "Oil & Gas / extraction",
+    "09": "Oil & Gas / services extraction",
+    "10": "Agroalimentaire", "11": "Agroalimentaire",
+    "13": "Textile", "14": "Textile", "15": "Textile / cuir",
+    "16": "Bois", "17": "Papier / carton",
+    "19": "Pétrochimie / raffinage",
+    "20": "Chimie", "21": "Pharma",
+    "22": "Plasturgie / caoutchouc",
+    "23": "Verre / matériaux de construction",
+    "24": "Métallurgie / industrie lourde", "25": "Métallurgie",
+    "26": "Électronique", "27": "Équipements électriques",
+    "28": "Fabrication de machines",
+    "29": "Automobile", "30": "Ferroviaire / aéronautique / naval",
+    "31": "Ameublement", "32": "Autres industries",
+    "33": "Maintenance industrielle",
+    "35": "Énergie",
+    "41": "Construction / bâtiment", "42": "Travaux publics", "43": "Construction / BTP",
+    "71": "Ingénierie / études techniques",
+    "72": "R&D",
+}
 
 GOOGLE_NEWS_RSS = "https://news.google.com/rss/search?q={query}&hl=fr&gl=FR&ceid=FR:fr"
 
@@ -122,15 +154,18 @@ BODACC_API = "https://bodacc-datadila.opendatasoft.com/api/explore/v2.1/catalog/
 # (site:xxx), sans exigence de zone puisque ces sources sont déjà
 # régionales/locales par nature.
 # Format : "Nom affiché": "domaine.tld"  (domaine seul, sans https://www. ni chemin)
+# Format : "Nom affiché": ("domaine.tld", "Zone par défaut")
+# La zone par défaut sert quand aucune ville précise n'est détectée dans le
+# texte de l'article — utile pour le tri par région/département.
 SOURCES_SPECIALISEES = {
-    "Les Affiches d'Alsace et de Lorraine": "affiches-moniteur.com",
-    "La Semaine": "lasemaine.fr",
-    "Le Journal des Entreprises (Grand Est)": "lejournaldesentreprises.com",
-    "Société.tech": "societe.tech",
-    "Traces Écrites News": "tracesecritesnews.fr",
-    "Point Éco Alsace": "pointecoalsace.fr",
-    "Paperjam (Luxembourg)": "paperjam.lu",
-    "Delano (Luxembourg)": "delano.lu",
+    "Les Affiches d'Alsace et de Lorraine": ("affiches-moniteur.com", "Alsace/Lorraine"),
+    "La Semaine": ("lasemaine.fr", "Moselle"),
+    "Le Journal des Entreprises (Grand Est)": ("lejournaldesentreprises.com", "Grand Est"),
+    "Société.tech": ("societe.tech", "Grand Est"),
+    "Traces Écrites News": ("tracesecritesnews.fr", "Grand Est"),
+    "Point Éco Alsace": ("pointecoalsace.fr", "Alsace"),
+    "Paperjam (Luxembourg)": ("paperjam.lu", "Luxembourg"),
+    "Delano (Luxembourg)": ("delano.lu", "Luxembourg"),
 }
 
 # Flux RSS direct de L'essentiel (Luxembourg), rubrique économie.
@@ -183,13 +218,19 @@ def fetch_bodacc(since):
     Une requête simple par département plutôt qu'une clause combinée
     (numerodepartement + date) : le filtrage par date se fait côté Python,
     après récupération, plutôt que de dépendre d'une syntaxe de comparaison
-    de date côté API."""
+    de date côté API.
+
+    Exclut volontairement les dépôts de comptes annuels ("BODACC C",
+    familleavis="dpc") : c'est une formalité récurrente et systématique,
+    sans intérêt pour cette veille, qui représente la grande majorité du
+    volume brut si on ne l'exclut pas."""
     items = []
+    FAMILLES_EXCLUES = {"dpc"}  # dépôts des comptes annuels — bruit, pas signal
 
     for dept in DEPARTEMENTS_GRAND_EST:
         params = {
             "where": f'numerodepartement="{dept}"',
-            "limit": 20,
+            "limit": 40,
             "order_by": "dateparution desc",
         }
         try:
@@ -197,6 +238,8 @@ def fetch_bodacc(since):
             resp.raise_for_status()
             data = resp.json()
             for rec in data.get("results", []):
+                if rec.get("familleavis") in FAMILLES_EXCLUES:
+                    continue
                 published = _parse_date(rec.get("dateparution", ""))
                 if published and published < since:
                     continue
@@ -221,10 +264,12 @@ def fetch_bodacc(since):
     return items
 
 
-def fetch_specialized_source(theme_keywords, domain, source_label, since):
+def fetch_specialized_source(theme_keywords, domain, source_label, zone_defaut, since):
     """Interroge Google News, restreint à un domaine précis (site:xxx),
-    pour une source spécialisée. Pas d'exigence de zone : ces sources sont
-    déjà régionales par nature (Alsace/Lorraine ou Luxembourg)."""
+    pour une source spécialisée. Pas d'exigence de zone à la requête : ces
+    sources sont déjà régionales par nature (Alsace/Lorraine ou Luxembourg)
+    — `zone_defaut` sert d'étiquette de tri tant qu'aucune ville plus
+    précise n'est détectée dans le texte de l'article."""
     keyword_clause = " OR ".join(f'"{kw}"' for kw in theme_keywords)
     query = f"site:{domain} ({keyword_clause})"
     url = GOOGLE_NEWS_RSS.format(query=quote_plus(query))
@@ -242,7 +287,7 @@ def fetch_specialized_source(theme_keywords, domain, source_label, since):
                 "source": source_label,
                 "published": published,
                 "summary": _strip_html(entry.get("summary", "")),
-                "zone": "",
+                "zone": zone_defaut,
             })
     except Exception as exc:  # noqa: BLE001
         print(f"[warn] échec source spécialisée '{source_label}': {exc}", file=sys.stderr)
@@ -275,8 +320,9 @@ def fetch_lessentiel(since):
 
 def naf_matches_cible(code_naf):
     """Vérifie si un code NAF appartient aux secteurs ciblés : industrie
-    manufacturière (divisions 10 à 33), énergie (division 35), ingénierie /
-    études techniques (code 71.12)."""
+    manufacturière (divisions 10 à 33, dont pharma=21, pétrochimie=19),
+    énergie (35), construction/bâtiment (41-43), ingénierie (71.12),
+    R&D (72), extraction oil & gas (06, 09)."""
     if not code_naf:
         return False
     code = code_naf.replace(".", "").upper()
@@ -285,9 +331,22 @@ def naf_matches_cible(code_naf):
     division = code[:2]
     if division.isdigit():
         div_num = int(division)
-        if div_num == 35 or 10 <= div_num <= 33:
+        if div_num in (6, 9, 35, 41, 42, 43, 72):
+            return True
+        if 10 <= div_num <= 33:
             return True
     return False
+
+
+def naf_to_secteur_label(code_naf):
+    """Traduit un code NAF en libellé de secteur lisible pour l'affichage."""
+    if not code_naf:
+        return None
+    code = code_naf.replace(".", "").upper()
+    if code.startswith("7112"):
+        return NAF_LABELS["71"]
+    division = code[:2]
+    return NAF_LABELS.get(division)
 
 
 def lookup_naf(company_name, cache):
@@ -331,8 +390,8 @@ def collect(mode):
                 item["theme"] = theme
             all_items.extend(found)
 
-        for source_label, domain in SOURCES_SPECIALISEES.items():
-            found = fetch_specialized_source(keywords, domain, source_label, since)
+        for source_label, (domain, zone_defaut) in SOURCES_SPECIALISEES.items():
+            found = fetch_specialized_source(keywords, domain, source_label, zone_defaut, since)
             for item in found:
                 item["theme"] = theme
             all_items.extend(found)
@@ -345,6 +404,8 @@ def collect(mode):
     print(f"[info] {len(apres_filtre)} items après filtrage sectoriel/NAF", file=sys.stderr)
     apres_dedupe = _dedupe(apres_filtre)
     print(f"[info] {len(apres_dedupe)} items après dédoublonnage", file=sys.stderr)
+
+    _enrich(apres_dedupe)
 
     return apres_dedupe
 
@@ -426,6 +487,36 @@ def _filter_sector(items):
     return kept
 
 
+def _enrich(items):
+    """Calcule, pour chaque article retenu, une zone d'affichage (pour le
+    tri par région/département) et un secteur d'affichage (pour que chaque
+    ligne indique dans quel secteur travaille l'entreprise citée). Modifie
+    les items en place."""
+    naf_cache = {}
+    zones_triees = sorted(ZONES, key=len, reverse=True)  # ville précise avant "Grand Est"
+
+    for item in items:
+        text = f"{item['title']} {item['summary']}"
+        text_lower = text.lower()
+
+        # --- Zone affichée ---
+        zone_trouvee = next((z for z in zones_triees if z.lower() in text_lower), None)
+        item["zone_affichee"] = zone_trouvee or item.get("zone") or "Non localisé"
+
+        # --- Secteur affiché ---
+        secteur = None
+        entreprise = item.get("_entreprise_nom") or next(
+            (e for e in ENTREPRISES_SURVEILLANCE if e.lower() in text_lower), None
+        )
+        if entreprise and entreprise != "Entreprise non identifiée":
+            naf = lookup_naf(entreprise, naf_cache)
+            secteur = naf_to_secteur_label(naf)
+        if not secteur:
+            mot_trouve = next((s for s in SECTEURS if s in text_lower), None)
+            secteur = mot_trouve.capitalize() if mot_trouve else None
+        item["secteur_affiche"] = secteur or "Non déterminé"
+
+
 def _dedupe(items):
     """Déduplique par similarité de titre (pas seulement égalité stricte),
     pour repérer le même événement raconté différemment par deux sources."""
@@ -487,24 +578,28 @@ def render_html(items, mode):
     title = "Veille quotidienne" if mode == "daily" else "Récap hebdomadaire"
     today = datetime.now().strftime("%d/%m/%Y")
 
-    by_theme = {}
+    by_zone = {}
     for item in items:
-        by_theme.setdefault(item["theme"], []).append(item)
+        by_zone.setdefault(item.get("zone_affichee", "Non localisé"), []).append(item)
 
     sections = []
-    for theme, theme_items in by_theme.items():
+    for zone, zone_items in sorted(by_zone.items(), key=lambda kv: -len(kv[1])):
         rows = []
-        for item in theme_items:
+        for item in zone_items:
             date_str = item["published"].strftime("%d/%m") if item["published"] else ""
             rows.append(f"""
             <li>
               <span class="date">{date_str}</span>
               <a href="{html.escape(item['link'])}" target="_blank">{html.escape(item['title'])}</a>
+              <span class="tags">
+                <span class="tag secteur">{html.escape(item.get('secteur_affiche', 'Non déterminé'))}</span>
+                <span class="tag theme">{html.escape(item['theme'])}</span>
+              </span>
               <span class="source">— {html.escape(item['source'])}</span>
             </li>""")
         sections.append(f"""
         <section>
-          <h2>{html.escape(theme)} <span class="count">({len(theme_items)})</span></h2>
+          <h2>{html.escape(zone)} <span class="count">({len(zone_items)})</span></h2>
           <ul>{''.join(rows)}</ul>
         </section>""")
 
@@ -525,18 +620,21 @@ def render_html(items, mode):
   ul {{ list-style: none; padding: 0; }}
   li {{ padding: 8px 0; border-bottom: 1px solid #e5e5e5; }}
   .date {{ color: #999; font-size: 0.85em; margin-right: 8px; }}
+  .tags {{ display: block; margin: 4px 0 2px; }}
+  .tag {{ display: inline-block; font-size: 0.72em; padding: 1px 7px; border-radius: 10px; margin-right: 6px; }}
+  .tag.secteur {{ background: #eadfce; color: #6b4f1d; }}
+  .tag.theme {{ background: #e2e8ee; color: #35506b; }}
   .source {{ color: #999; font-size: 0.85em; }}
   a {{ color: #1a1a1a; text-decoration: none; }}
   a:hover {{ text-decoration: underline; }}
-  footer {{ margin-top: 40px; font-size: 0.8em; color: #999; }}
-</style>
+  footer {{ margin-top: 40px; font-size: 0.8em; color: #999; }}</style>
 </head>
 <body>
   <h1>Veille économique — Grand Est & Luxembourg
-    <span class="sub">{title} · industrie / ingénierie / énergie · {today}</span>
+    <span class="sub">{title} · industrie / ingénierie / énergie / bâtiment / R&amp;D · {today}</span>
   </h1>
   {body}
-  <footer>Généré automatiquement · sources : Google News, BODACC</footer>
+  <footer>Généré automatiquement · sources : Google News, BODACC, registre SIRENE</footer>
 </body>
 </html>"""
 
