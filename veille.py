@@ -181,16 +181,14 @@ def fetch_bodacc(since):
     créations) pour les départements couverts depuis `since`.
 
     Une requête simple par département plutôt qu'une clause combinée
-    (departement + date) : les tentatives précédentes avec une clause where
-    combinant plusieurs départements ET une condition de date échouaient
-    systématiquement (400 Bad Request), probablement à cause de la syntaxe
-    de comparaison de date. Le filtrage par date se fait ici côté Python,
-    après récupération — plus robuste que de deviner la bonne syntaxe ODSQL."""
+    (numerodepartement + date) : le filtrage par date se fait côté Python,
+    après récupération, plutôt que de dépendre d'une syntaxe de comparaison
+    de date côté API."""
     items = []
 
     for dept in DEPARTEMENTS_GRAND_EST:
         params = {
-            "where": f'departement="{dept}"',
+            "where": f'numerodepartement="{dept}"',
             "limit": 20,
             "order_by": "dateparution desc",
         }
@@ -202,15 +200,18 @@ def fetch_bodacc(since):
                 published = _parse_date(rec.get("dateparution", ""))
                 if published and published < since:
                     continue
-                nom = rec.get("registre") or rec.get("commercant") or "Entreprise non identifiée"
+                # "commercant" est le nom lisible de l'entreprise. "registre"
+                # est en réalité une liste (le SIREN sous deux formats), pas
+                # un nom — à ne pas utiliser comme tel.
+                nom = rec.get("commercant") or "Entreprise non identifiée"
                 famille = rec.get("familleavis_lib") or rec.get("familleavis") or ""
                 ville = rec.get("ville") or ""
                 items.append({
                     "title": f"[BODACC] {famille} — {nom} ({ville}, {dept})",
-                    "link": "https://www.bodacc.fr/",
+                    "link": rec.get("url_complete") or "https://www.bodacc.fr/",
                     "source": "BODACC",
                     "published": published,
-                    "summary": rec.get("texte") or "",
+                    "summary": "",
                     "zone": ville or dept,
                     "_entreprise_nom": nom,
                 })
