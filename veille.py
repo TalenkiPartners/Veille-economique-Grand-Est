@@ -43,38 +43,94 @@ import requests
 # Zones couvertes. Chaque entrée sert de mot-clé de recherche pour Google News.
 ZONES = [
     "Grand Est",
-    "Moselle",
-    "Meurthe-et-Moselle",
-    "Bas-Rhin",
-    "Haut-Rhin",
-    "Meuse",
-    "Vosges",
-    "Marne",
-    "Ardennes",
-    "Luxembourg",
-    "Metz",
-    "Nancy",
-    "Strasbourg",
-    "Mulhouse",
-    "Colmar",
-    "Reims",
-    "Troyes",
-    "Charleville-Mézières",
-    "Épinal",
-    "Thionville",
-    "Forbach",
-    "Sarreguemines",
-    "Verdun",
-    "Châlons-en-Champagne",
-    "Franche-Comté",
-    "Bourgogne",
-    "Belfort",
-    "Dijon",
-    "Montbéliard",
+    # Lorraine
+    "Metz", "Nancy", "Thionville", "Forbach", "Sarreguemines", "Sarrebourg",
+    "Saint-Avold", "Hagondange", "Florange", "Longwy", "Pont-à-Mousson",
+    "Épinal", "Saint-Dié-des-Vosges", "Remiremont", "Verdun", "Bar-le-Duc",
+    "Lunéville", "Toul", "Batilly", "Freyming-Merlebach",
+    # Alsace
+    "Strasbourg", "Mulhouse", "Colmar", "Haguenau", "Sélestat", "Molsheim",
+    "Saverne", "Wissembourg", "Illkirch-Graffenstaden", "Schiltigheim",
+    "Obernai", "Erstein", "Wittenheim", "Cernay", "Altkirch", "Guebwiller",
+    "Thann", "Saint-Louis", "Huningue",
+    # Champagne-Ardenne
+    "Reims", "Châlons-en-Champagne", "Épernay", "Charleville-Mézières",
+    "Sedan", "Troyes", "Romilly-sur-Seine", "Chaumont", "Saint-Dizier",
+    "Langres", "Vitry-le-François", "Rethel",
+    # Franche-Comté
+    "Besançon", "Belfort", "Montbéliard", "Vesoul", "Lons-le-Saunier",
+    "Dole", "Pontarlier", "Héricourt", "Audincourt", "Sochaux",
+    # Bourgogne
+    "Dijon", "Chalon-sur-Saône", "Mâcon", "Auxerre", "Nevers",
+    "Le Creusot", "Montceau-les-Mines", "Sens", "Beaune",
+    # Luxembourg
+    "Luxembourg", "Esch-sur-Alzette", "Differdange", "Dudelange", "Belval", "Wiltz",
 ]
 
-# Départements couverts pour le filtrage BODACC (codes INSEE).
-DEPARTEMENTS_GRAND_EST = ["08", "10", "51", "52", "54", "55", "57", "67", "68", "88", "25", "90", "70", "21"]
+# Départements couverts pour le filtrage BODACC (codes INSEE) : Lorraine,
+# Alsace, Champagne-Ardenne, Franche-Comté et Bourgogne (ensemble complet).
+DEPARTEMENTS_GRAND_EST = [
+    "08", "10", "51", "52",              # Champagne-Ardenne
+    "54", "55", "57", "88",              # Lorraine
+    "67", "68",                          # Alsace
+    "25", "39", "70", "90",              # Franche-Comté
+    "21", "58", "71", "89",              # Bourgogne
+]
+
+# Correspondance ville -> région historique, pour le classement du mail.
+VILLE_VERS_REGION = {
+    # Lorraine
+    "Metz": "Lorraine", "Nancy": "Lorraine", "Thionville": "Lorraine",
+    "Forbach": "Lorraine", "Sarreguemines": "Lorraine", "Sarrebourg": "Lorraine",
+    "Saint-Avold": "Lorraine", "Hagondange": "Lorraine", "Florange": "Lorraine",
+    "Longwy": "Lorraine", "Pont-à-Mousson": "Lorraine", "Épinal": "Lorraine",
+    "Saint-Dié-des-Vosges": "Lorraine", "Remiremont": "Lorraine",
+    "Verdun": "Lorraine", "Bar-le-Duc": "Lorraine", "Lunéville": "Lorraine",
+    "Toul": "Lorraine", "Batilly": "Lorraine", "Freyming-Merlebach": "Lorraine",
+    # Alsace
+    "Strasbourg": "Alsace", "Mulhouse": "Alsace", "Colmar": "Alsace",
+    "Haguenau": "Alsace", "Sélestat": "Alsace", "Molsheim": "Alsace",
+    "Saverne": "Alsace", "Wissembourg": "Alsace",
+    "Illkirch-Graffenstaden": "Alsace", "Schiltigheim": "Alsace",
+    "Obernai": "Alsace", "Erstein": "Alsace", "Wittenheim": "Alsace",
+    "Cernay": "Alsace", "Altkirch": "Alsace", "Guebwiller": "Alsace",
+    "Thann": "Alsace", "Saint-Louis": "Alsace", "Huningue": "Alsace",
+    # Champagne-Ardenne
+    "Reims": "Champagne-Ardenne", "Châlons-en-Champagne": "Champagne-Ardenne",
+    "Épernay": "Champagne-Ardenne", "Charleville-Mézières": "Champagne-Ardenne",
+    "Sedan": "Champagne-Ardenne", "Troyes": "Champagne-Ardenne",
+    "Romilly-sur-Seine": "Champagne-Ardenne", "Chaumont": "Champagne-Ardenne",
+    "Saint-Dizier": "Champagne-Ardenne", "Langres": "Champagne-Ardenne",
+    "Vitry-le-François": "Champagne-Ardenne", "Rethel": "Champagne-Ardenne",
+    # Franche-Comté
+    "Besançon": "Franche-Comté", "Belfort": "Franche-Comté",
+    "Montbéliard": "Franche-Comté", "Vesoul": "Franche-Comté",
+    "Lons-le-Saunier": "Franche-Comté", "Dole": "Franche-Comté",
+    "Pontarlier": "Franche-Comté", "Héricourt": "Franche-Comté",
+    "Audincourt": "Franche-Comté", "Sochaux": "Franche-Comté",
+    # Bourgogne
+    "Dijon": "Bourgogne", "Chalon-sur-Saône": "Bourgogne", "Mâcon": "Bourgogne",
+    "Auxerre": "Bourgogne", "Nevers": "Bourgogne", "Le Creusot": "Bourgogne",
+    "Montceau-les-Mines": "Bourgogne", "Sens": "Bourgogne", "Beaune": "Bourgogne",
+    # Luxembourg
+    "Luxembourg": "Luxembourg", "Esch-sur-Alzette": "Luxembourg",
+    "Differdange": "Luxembourg", "Dudelange": "Luxembourg",
+    "Belval": "Luxembourg", "Wiltz": "Luxembourg",
+}
+
+# Correspondance code département INSEE -> région historique (pour les
+# items BODACC, qui donnent un département plutôt qu'un nom de ville).
+DEPARTEMENT_VERS_REGION = {
+    "08": "Champagne-Ardenne", "10": "Champagne-Ardenne",
+    "51": "Champagne-Ardenne", "52": "Champagne-Ardenne",
+    "54": "Lorraine", "55": "Lorraine", "57": "Lorraine", "88": "Lorraine",
+    "67": "Alsace", "68": "Alsace",
+    "25": "Franche-Comté", "39": "Franche-Comté",
+    "70": "Franche-Comté", "90": "Franche-Comté",
+    "21": "Bourgogne", "58": "Bourgogne", "71": "Bourgogne", "89": "Bourgogne",
+}
+
+REGIONS_CONNUES = ["Luxembourg", "Lorraine", "Alsace", "Franche-Comté", "Champagne-Ardenne", "Bourgogne"]
 
 # Thématiques suivies. Chaque valeur est une liste de synonymes/variantes
 # combinés en OR dans la requête.
@@ -158,11 +214,11 @@ BODACC_API = "https://bodacc-datadila.opendatasoft.com/api/explore/v2.1/catalog/
 # La zone par défaut sert quand aucune ville précise n'est détectée dans le
 # texte de l'article — utile pour le tri par région/département.
 SOURCES_SPECIALISEES = {
-    "Les Affiches d'Alsace et de Lorraine": ("affiches-moniteur.com", "Alsace/Lorraine"),
-    "La Semaine": ("lasemaine.fr", "Moselle"),
-    "Le Journal des Entreprises (Grand Est)": ("lejournaldesentreprises.com", "Grand Est"),
-    "Société.tech": ("societe.tech", "Grand Est"),
-    "Traces Écrites News": ("tracesecritesnews.fr", "Grand Est"),
+    "Les Affiches d'Alsace et de Lorraine": ("affiches-moniteur.com", "AUTRES"),
+    "La Semaine": ("lasemaine.fr", "Lorraine"),
+    "Le Journal des Entreprises (Grand Est)": ("lejournaldesentreprises.com", "AUTRES"),
+    "Société.tech": ("societe.tech", "AUTRES"),
+    "Traces Écrites News": ("tracesecritesnews.fr", "AUTRES"),
     "Point Éco Alsace": ("pointecoalsace.fr", "Alsace"),
     "Paperjam (Luxembourg)": ("paperjam.lu", "Luxembourg"),
     "Delano (Luxembourg)": ("delano.lu", "Luxembourg"),
@@ -220,12 +276,17 @@ def fetch_bodacc(since):
     après récupération, plutôt que de dépendre d'une syntaxe de comparaison
     de date côté API.
 
-    Exclut volontairement les dépôts de comptes annuels ("BODACC C",
-    familleavis="dpc") : c'est une formalité récurrente et systématique,
-    sans intérêt pour cette veille, qui représente la grande majorité du
-    volume brut si on ne l'exclut pas."""
+    Ne garde que les annonces à forte valeur : ventes/cessions et
+    procédures collectives (redressement, liquidation, sauvegarde). Exclut
+    volontairement les dépôts de comptes annuels, immatriculations/
+    créations, modifications et radiations — de la mécanique administrative
+    routinière, sans intérêt pour cette veille, qui représente l'essentiel
+    du volume brut si on ne les exclut pas."""
     items = []
-    FAMILLES_EXCLUES = {"dpc"}  # dépôts des comptes annuels — bruit, pas signal
+    # Liste d'inclusion plutôt que d'exclusion : plus sûr pour ne garder que
+    # les événements à forte valeur, quel que soit le nom exact des autres
+    # catégories BODACC.
+    MOTS_UTILES = ("vente", "cession", "collectiv", "redressement", "liquidation", "sauvegarde", "rétablissement")
 
     for dept in DEPARTEMENTS_GRAND_EST:
         params = {
@@ -238,7 +299,8 @@ def fetch_bodacc(since):
             resp.raise_for_status()
             data = resp.json()
             for rec in data.get("results", []):
-                if rec.get("familleavis") in FAMILLES_EXCLUES:
+                famille_lib = (rec.get("familleavis_lib") or rec.get("familleavis") or "").lower()
+                if not any(mot in famille_lib for mot in MOTS_UTILES):
                     continue
                 published = _parse_date(rec.get("dateparution", ""))
                 if published and published < since:
@@ -487,21 +549,47 @@ def _filter_sector(items):
     return kept
 
 
+def classify_region(item, text_lower):
+    """Classe un article dans l'une des régions suivies (Lorraine, Alsace,
+    Champagne-Ardenne, Franche-Comté, Bourgogne, Luxembourg), ou AUTRES si
+    aucun indice de localisation n'est trouvé."""
+    # 1. Ville précise citée dans le texte — le signal le plus fiable.
+    for ville, region in VILLE_VERS_REGION.items():
+        if ville.lower() in text_lower:
+            return region
+
+    # 2. Département BODACC (le champ "zone" contient parfois un code dept).
+    dept = item.get("zone", "")
+    if dept in DEPARTEMENT_VERS_REGION:
+        return DEPARTEMENT_VERS_REGION[dept]
+
+    # 3. Zone par défaut de la source (ex. Paperjam -> Luxembourg), si elle
+    # correspond déjà directement à l'une des régions suivies.
+    zone_defaut = item.get("zone", "")
+    if zone_defaut in REGIONS_CONNUES:
+        return zone_defaut
+
+    # 4. Mention explicite du Luxembourg dans le texte.
+    if "luxembourg" in text_lower:
+        return "Luxembourg"
+
+    return "AUTRES"
+
+
 def _enrich(items):
-    """Calcule, pour chaque article retenu, une zone d'affichage (pour le
-    tri par région/département) et un secteur d'affichage (pour que chaque
-    ligne indique dans quel secteur travaille l'entreprise citée). Modifie
-    les items en place."""
+    """Calcule, pour chaque article retenu, une région d'affichage (parmi
+    Lorraine, Alsace, Champagne-Ardenne, Franche-Comté, Bourgogne,
+    Luxembourg, AUTRES) et un secteur d'affichage (pour que chaque ligne
+    indique dans quel secteur travaille l'entreprise citée). Modifie les
+    items en place."""
     naf_cache = {}
-    zones_triees = sorted(ZONES, key=len, reverse=True)  # ville précise avant "Grand Est"
 
     for item in items:
         text = f"{item['title']} {item['summary']}"
         text_lower = text.lower()
 
-        # --- Zone affichée ---
-        zone_trouvee = next((z for z in zones_triees if z.lower() in text_lower), None)
-        item["zone_affichee"] = zone_trouvee or item.get("zone") or "Non localisé"
+        # --- Région affichée ---
+        item["zone_affichee"] = classify_region(item, text_lower)
 
         # --- Secteur affiché ---
         secteur = None
@@ -580,10 +668,14 @@ def render_html(items, mode):
 
     by_zone = {}
     for item in items:
-        by_zone.setdefault(item.get("zone_affichee", "Non localisé"), []).append(item)
+        by_zone.setdefault(item.get("zone_affichee", "AUTRES"), []).append(item)
+
+    ordre_regions = REGIONS_CONNUES + ["AUTRES"]
+    zones_ordonnees = [z for z in ordre_regions if z in by_zone]
 
     sections = []
-    for zone, zone_items in sorted(by_zone.items(), key=lambda kv: -len(kv[1])):
+    for zone in zones_ordonnees:
+        zone_items = by_zone[zone]
         rows = []
         for item in zone_items:
             date_str = item["published"].strftime("%d/%m") if item["published"] else ""
