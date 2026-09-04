@@ -2,9 +2,11 @@ name: Veille quotidienne
 
 on:
   schedule:
-    # 06h30 heure de Paris = 05h30 UTC (04h30 UTC en heure d'été,
-    # GitHub tolère un décalage de quelques minutes sur les cron)
-    - cron: "30 5 * * 1-5"
+    # 8h00 heure de Paris en été (UTC+2) = 6h00 UTC.
+    # En hiver (UTC+1), ça arrivera à 7h heure de Paris — GitHub Actions ne
+    # gère pas le changement d'heure automatiquement. À ajuster à la main
+    # (remplacer "0 6" par "0 7") fin octobre si besoin d'une précision exacte.
+    - cron: "0 6 * * *"
   workflow_dispatch: {}
 
 permissions:
