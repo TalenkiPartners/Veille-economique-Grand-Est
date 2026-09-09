@@ -138,7 +138,7 @@ THEMES = {
     "Levées de fonds / investissements": ["levée de fonds", "investissement", "financement", "capital-risque", "investissement sur site"],
     "Recrutement": ["recrutement", "embauche", "création d'emplois", "plan de recrutement"],
     "Licenciements / fermetures": ["licenciement", "plan social", "PSE", "fermeture d'usine", "liquidation judiciaire"],
-    "Rachats / cessions": ["rachat", "acquisition", "cession d'entreprise", "reprise d'activité"],
+    "Rachats / cessions": ["rachat", "acquisition"],
     "Constructions / nouveaux sites": ["construction d'une usine", "nouveau site", "extension du site", "nouveau bâtiment", "inauguration d'usine", "transfert d'activité", "implantation"],
     "Contrats / partenariats / commandes": ["signature d'un contrat", "partenariat", "accord de coopération", "grosse commande", "commande record", "nouveau contrat"],
     "Brevets / R&D": ["dépôt de brevet", "brevet déposé", "innovation technologique"],
@@ -384,10 +384,25 @@ def naf_matches_cible(code_naf):
     """Vérifie si un code NAF appartient aux secteurs ciblés : industrie
     manufacturière (divisions 10 à 33, dont pharma=21, pétrochimie=19),
     énergie (35), construction/bâtiment (41-43), ingénierie (71.12),
-    R&D (72), extraction oil & gas (06, 09)."""
+    R&D (72), extraction oil & gas (06, 09).
+
+    Exclut explicitement l'artisanat alimentaire de détail (boulangerie,
+    pâtisserie, boucherie, charcuterie...) : techniquement classé dans la
+    même division NAF que l'agroalimentaire industriel, mais ce n'est pas
+    le type d'entreprise visé par cette veille."""
     if not code_naf:
         return False
     code = code_naf.replace(".", "").upper()
+
+    NAF_ARTISANAT_EXCLUS = {
+        "1071C",  # Boulangerie et boulangerie-pâtisserie
+        "1071D",  # Pâtisserie
+        "1013A",  # Boucherie
+        "1013B",  # Charcuterie
+    }
+    if code in NAF_ARTISANAT_EXCLUS:
+        return False
+
     if code.startswith("7112"):
         return True
     division = code[:2]
@@ -511,11 +526,22 @@ def _filter_sector(items):
         text_lower = f"{titre_nettoye} {item['summary']}".lower()
 
         if item["source"] == "BODACC":
+            # fetch_bodacc() a déjà restreint aux types d'événements à forte
+            # valeur (ventes/cessions, procédures collectives). Ici, on
+            # affine par secteur seulement quand c'est fiable : un nom
+            # d'entreprise "propre" (pas un particulier au format
+            # "Nom, Prénom") dont le NAF est confirmé hors cible. Si le nom
+            # est un particulier ou que la recherche ne trouve rien, on
+            # garde l'article plutôt que de l'écarter par défaut — mieux
+            # vaut un secteur incertain qu'une vraie cession/procédure
+            # perdue silencieusement.
             entreprise = item.get("_entreprise_nom")
-            if entreprise and entreprise != "Entreprise non identifiée":
+            nom_individuel = bool(entreprise) and "," in entreprise
+            if entreprise and entreprise != "Entreprise non identifiée" and not nom_individuel:
                 naf = lookup_naf(entreprise, naf_cache)
-                if naf_matches_cible(naf):
-                    kept.append(item)
+                if naf and not naf_matches_cible(naf):
+                    continue  # NAF confirmé mais hors secteur ciblé
+            kept.append(item)
             continue
 
         entreprise_citee = next(
@@ -596,7 +622,13 @@ def _enrich(items):
         entreprise = item.get("_entreprise_nom") or next(
             (e for e in ENTREPRISES_SURVEILLANCE if e.lower() in text_lower), None
         )
-        if entreprise and entreprise != "Entreprise non identifiée":
+        # Un nom au format "Nom, Prénom[, Prénom2]" (typique des entrepreneurs
+        # individuels dans BODACC) n'est pas fiable pour une recherche NAF par
+        # nom : le registre peut renvoyer une entreprise homonyme sans rapport.
+        # On ignore le rapprochement dans ce cas plutôt que d'afficher un
+        # secteur trompeur.
+        nom_individuel = bool(entreprise) and "," in entreprise
+        if entreprise and entreprise != "Entreprise non identifiée" and not nom_individuel:
             naf = lookup_naf(entreprise, naf_cache)
             secteur = naf_to_secteur_label(naf)
         if not secteur:
