@@ -138,7 +138,7 @@ THEMES = {
     "Levées de fonds / investissements": ["levée de fonds", "investissement", "financement", "capital-risque", "investissement sur site"],
     "Recrutement": ["recrutement", "embauche", "création d'emplois", "plan de recrutement"],
     "Licenciements / fermetures": ["licenciement", "plan social", "PSE", "fermeture d'usine", "liquidation judiciaire"],
-    "Rachats / cessions": ["rachat", "acquisition"],
+    "Rachats / cessions": ["rachat", "acquisition", "cession d'entreprise", "reprise d'activité"],
     "Constructions / nouveaux sites": ["construction d'une usine", "nouveau site", "extension du site", "nouveau bâtiment", "inauguration d'usine", "transfert d'activité", "implantation"],
     "Contrats / partenariats / commandes": ["signature d'un contrat", "partenariat", "accord de coopération", "grosse commande", "commande record", "nouveau contrat"],
     "Brevets / R&D": ["dépôt de brevet", "brevet déposé", "innovation technologique"],
@@ -222,6 +222,10 @@ SOURCES_SPECIALISEES = {
     "Point Éco Alsace": ("pointecoalsace.fr", "Alsace"),
     "Paperjam (Luxembourg)": ("paperjam.lu", "Luxembourg"),
     "Delano (Luxembourg)": ("delano.lu", "Luxembourg"),
+    "L'Usine Nouvelle": ("usinenouvelle.com", "AUTRES"),
+    "Industrie & Technologies": ("industrie-techno.com", "AUTRES"),
+    "L'Est Républicain": ("estrepublicain.fr", "Lorraine"),
+    "Dernières Nouvelles d'Alsace": ("dna.fr", "Alsace"),
 }
 
 # Flux RSS direct de L'essentiel (Luxembourg), rubrique économie.
@@ -415,6 +419,25 @@ def naf_matches_cible(code_naf):
     return False
 
 
+LEGAL_FORM_MARKERS = (
+    "SARL", "SAS", "SASU", "SELARL", "EURL", "SCI", "SNC", " SA ", "ETS",
+    "ETABLISSEMENT", "ENTREPRISE", "SOCIETE", "SOCIÉTÉ", "COOPERATIVE",
+    "COOPÉRATIVE", "GROUPE", "SELAS", "SCEA", "SCOP", "GAEC", "GIE",
+)
+
+
+def looks_like_individual(nom):
+    """Heuristique : vrai si le nom ressemble à une personne physique au
+    format BODACC ('Nom, Prénom[, Prénom2]') plutôt qu'à une société. Un
+    nom contenant un marqueur de forme juridique (SARL, SAS...) n'est
+    jamais considéré comme un particulier, même s'il contient une virgule
+    (cas des sociétés à plusieurs associés listés)."""
+    if not nom or "," not in nom:
+        return False
+    nom_upper = nom.upper()
+    return not any(marker in nom_upper for marker in LEGAL_FORM_MARKERS)
+
+
 def naf_to_secteur_label(code_naf):
     """Traduit un code NAF en libellé de secteur lisible pour l'affichage."""
     if not code_naf:
@@ -527,21 +550,22 @@ def _filter_sector(items):
 
         if item["source"] == "BODACC":
             # fetch_bodacc() a déjà restreint aux types d'événements à forte
-            # valeur (ventes/cessions, procédures collectives). Ici, on
-            # affine par secteur seulement quand c'est fiable : un nom
-            # d'entreprise "propre" (pas un particulier au format
-            # "Nom, Prénom") dont le NAF est confirmé hors cible. Si le nom
-            # est un particulier ou que la recherche ne trouve rien, on
-            # garde l'article plutôt que de l'écarter par défaut — mieux
-            # vaut un secteur incertain qu'une vraie cession/procédure
-            # perdue silencieusement.
+            # valeur (ventes/cessions, procédures collectives). Mais ce
+            # filtre à lui seul ne suffit pas : la majorité des faillites et
+            # cessions, tous secteurs confondus, concernent des commerces et
+            # indépendants sans rapport avec l'industrie. On exige donc une
+            # confirmation NAF positive pour garder un article, et on écarte
+            # d'office les particuliers non identifiables (impossible à
+            # vérifier de façon fiable, et très majoritairement hors sujet
+            # en pratique).
             entreprise = item.get("_entreprise_nom")
-            nom_individuel = bool(entreprise) and "," in entreprise
-            if entreprise and entreprise != "Entreprise non identifiée" and not nom_individuel:
-                naf = lookup_naf(entreprise, naf_cache)
-                if naf and not naf_matches_cible(naf):
-                    continue  # NAF confirmé mais hors secteur ciblé
-            kept.append(item)
+            if not entreprise or entreprise == "Entreprise non identifiée":
+                continue
+            if looks_like_individual(entreprise):
+                continue
+            naf = lookup_naf(entreprise, naf_cache)
+            if naf_matches_cible(naf):
+                kept.append(item)
             continue
 
         entreprise_citee = next(
@@ -622,13 +646,12 @@ def _enrich(items):
         entreprise = item.get("_entreprise_nom") or next(
             (e for e in ENTREPRISES_SURVEILLANCE if e.lower() in text_lower), None
         )
-        # Un nom au format "Nom, Prénom[, Prénom2]" (typique des entrepreneurs
-        # individuels dans BODACC) n'est pas fiable pour une recherche NAF par
-        # nom : le registre peut renvoyer une entreprise homonyme sans rapport.
-        # On ignore le rapprochement dans ce cas plutôt que d'afficher un
-        # secteur trompeur.
-        nom_individuel = bool(entreprise) and "," in entreprise
-        if entreprise and entreprise != "Entreprise non identifiée" and not nom_individuel:
+        # Un nom qui ressemble à un particulier (et pas une société listant
+        # plusieurs associés) n'est pas fiable pour une recherche NAF par
+        # nom : le registre peut renvoyer une entreprise homonyme sans
+        # rapport. On ignore le rapprochement dans ce cas plutôt que
+        # d'afficher un secteur trompeur.
+        if entreprise and entreprise != "Entreprise non identifiée" and not looks_like_individual(entreprise):
             naf = lookup_naf(entreprise, naf_cache)
             secteur = naf_to_secteur_label(naf)
         if not secteur:
