@@ -132,6 +132,32 @@ DEPARTEMENT_VERS_REGION = {
 
 REGIONS_CONNUES = ["Luxembourg", "Lorraine", "Alsace", "Franche-Comté", "Champagne-Ardenne", "Bourgogne"]
 
+# Noms de départements et de régions cités en toutes lettres dans les
+# articles ("Haut-Rhin : ...", "Franche-Comté. ..."). Testé avant les villes
+# car souvent plus explicite. L'ordre compte peu, la recherche se fait en
+# mot entier.
+NOM_TERRITOIRE_VERS_REGION = {
+    # Lorraine
+    "Moselle": "Lorraine", "Meurthe-et-Moselle": "Lorraine",
+    "Meuse": "Lorraine", "Vosges": "Lorraine", "Lorraine": "Lorraine",
+    # Alsace
+    "Bas-Rhin": "Alsace", "Haut-Rhin": "Alsace", "Alsace": "Alsace",
+    # Champagne-Ardenne
+    "Marne": "Champagne-Ardenne", "Haute-Marne": "Champagne-Ardenne",
+    "Ardennes": "Champagne-Ardenne", "Aube": "Champagne-Ardenne",
+    "Champagne-Ardenne": "Champagne-Ardenne", "Champagne": "Champagne-Ardenne",
+    # Franche-Comté
+    "Doubs": "Franche-Comté", "Jura": "Franche-Comté",
+    "Haute-Saône": "Franche-Comté", "Territoire de Belfort": "Franche-Comté",
+    "Franche-Comté": "Franche-Comté", "comtois": "Franche-Comté",
+    # Bourgogne
+    "Côte-d'Or": "Bourgogne", "Nièvre": "Bourgogne",
+    "Saône-et-Loire": "Bourgogne", "Yonne": "Bourgogne",
+    "Bourgogne": "Bourgogne",
+    # Luxembourg
+    "Luxembourg": "Luxembourg", "luxembourgeois": "Luxembourg",
+}
+
 # Thématiques suivies. Chaque valeur est une liste de synonymes/variantes
 # combinés en OR dans la requête.
 THEMES = {
@@ -228,6 +254,29 @@ SOURCES_SPECIALISEES = {
     "Dernières Nouvelles d'Alsace": ("dna.fr", "Alsace"),
 }
 
+# Sources à couverture nationale : sans contrainte géographique, elles
+# noient la veille sous des centaines d'articles hors périmètre (offres
+# d'emploi partout en France, communiqués de tous les départements...).
+# Un article venant de ces sources n'est gardé que s'il est rattaché à
+# l'une des régions suivies.
+SOURCES_NATIONALES = {
+    "L'Usine Nouvelle",
+    "Industrie & Technologies",
+    "Société.tech",
+    "L'essentiel (Luxembourg)",
+}
+
+# Motifs typiques des pages non-éditoriales (offres d'emploi, fiches
+# produits du catalogue, pages de marque) qui polluent les flux des
+# grands médias industriels.
+MOTIFS_NON_EDITORIAUX = [
+    r"\bCDI\b", r"\bCDD\b", r"\bH/F\b", r"\bF/H\b", r"\bstage\b", r"\balternance\b",
+    r"\bprofession libérale\b", r"\brecrute\b.*\bposte\b",
+    r"^\s*[\w\s'’-]+ \| [\w\s'’.-]+$",      # "Produit | MARQUE"
+    r"\b\d+\s?(mm|cm|m²|kg|A)\b",            # dimensions/caractéristiques produit
+    r"\bréf(érence)?\.?\s?:", r"\bnormes? EN\b",
+]
+
 # Flux RSS direct de L'essentiel (Luxembourg), rubrique économie.
 LESSENTIEL_RSS = "https://partner-feeds.lessentiel.lu/rss/lessentiel-fr/economie"
 
@@ -322,6 +371,7 @@ def fetch_bodacc(since):
                     "published": published,
                     "summary": "",
                     "zone": ville or dept,
+                    "_departement": dept,
                     "_entreprise_nom": nom,
                 })
         except Exception as exc:  # noqa: BLE001
@@ -581,16 +631,19 @@ def _filter_sector(items):
             # directement (le lookup peut échouer sans que ce soit une
             # vraie non-pertinence).
 
-        # L'essentiel n'est pas scopé géographiquement au moment de la
+        # Écarte les pages non-éditoriales : offres d'emploi, fiches
+        # produits du catalogue, pages de marque. Très fréquentes dans les
+        # flux des grands médias industriels, sans aucune valeur de veille.
+        if any(_re.search(motif, item["title"], _re.I) for motif in MOTIFS_NON_EDITORIAUX):
+            continue
+
+        # Les sources nationales ne sont pas scopées géographiquement à la
         # requête (contrairement à Google News, interrogé avec le nom de
-        # zone en dur, ou aux sources spécialisées, régionales par nature) :
-        # on exige donc explicitement une mention du Luxembourg ou d'une des
-        # zones suivies avant d'accepter un simple mot-clé sectoriel, sinon
-        # le préfixe de rubrique suffit à faire passer n'importe quelle
-        # actualité internationale.
-        if item["source"] == "L'essentiel (Luxembourg)":
-            zone_mentionnee = any(z.lower() in text_lower for z in ZONES)
-            if not zone_mentionnee:
+        # zone en dur, ou aux sources régionales). Sans cette contrainte,
+        # elles déversent tout leur flux national. On exige donc que
+        # l'article soit rattachable à l'une des régions suivies.
+        if item["source"] in SOURCES_NATIONALES:
+            if classify_region(item, f"{item['title']} {item['summary']}".lower()) == "AUTRES":
                 continue
 
         if any(sect in text_lower for sect in SECTEURS):
@@ -602,26 +655,54 @@ def _filter_sector(items):
 def classify_region(item, text_lower):
     """Classe un article dans l'une des régions suivies (Lorraine, Alsace,
     Champagne-Ardenne, Franche-Comté, Bourgogne, Luxembourg), ou AUTRES si
-    aucun indice de localisation n'est trouvé."""
-    # 1. Ville précise citée dans le texte — le signal le plus fiable.
-    for ville, region in VILLE_VERS_REGION.items():
-        if ville.lower() in text_lower:
+    aucun indice de localisation n'est trouvé.
+
+    La recherche se fait sur des mots entiers : une simple recherche de
+    sous-chaîne classait "Toulon" en Lorraine (à cause de "Toul") ou
+    "dans le sens de" en Bourgogne (à cause de "Sens")."""
+    import re as _re
+
+    # 0. Code département explicite fourni par la source (BODACC).
+    dept_code = item.get("_departement", "")
+    if dept_code in DEPARTEMENT_VERS_REGION:
+        return DEPARTEMENT_VERS_REGION[dept_code]
+
+    # 1. Nom de département ou de région cité dans le texte — souvent plus
+    # explicite qu'une ville ("Haut-Rhin : ...", "Franche-Comté. ...").
+    # Les noms composés contiennent des tirets, que \b traite comme des
+    # limites de mot : on encadre donc par des caractères non-alphabétiques
+    # plutôt que par \b.
+    def _cite(nom):
+        return _re.search(rf"(?<![\w-]){_re.escape(nom.lower())}(?![\w-])", text_lower)
+
+    for nom, region in NOM_TERRITOIRE_VERS_REGION.items():
+        if _cite(nom):
             return region
 
-    # 2. Département BODACC (le champ "zone" contient parfois un code dept).
-    dept = item.get("zone", "")
-    if dept in DEPARTEMENT_VERS_REGION:
-        return DEPARTEMENT_VERS_REGION[dept]
+    # 1bis. Nom de territoire en fin de nom composé de commune
+    # ("Pagny-sur-Meuse", "Neuves-Maisons") : le tiret empêche la
+    # détection en mot isolé, mais l'indice géographique reste valide.
+    for nom, region in NOM_TERRITOIRE_VERS_REGION.items():
+        if _re.search(rf"-(?:sur-|les-|lès-|en-)?{_re.escape(nom.lower())}(?![\w-])", text_lower):
+            return region
+
+    # 2. Ville précise citée dans le texte, en mot entier. Certaines villes
+    # portent un nom qui est aussi un mot courant ("Sens", "Fours", "Thann") :
+    # les chercher dans du texte libre produit des faux positifs ("dans le
+    # sens de..."), donc on les ignore ici. Elles restent rattachables via
+    # leur code département (étape 0) pour les sources qui le fournissent.
+    VILLES_AMBIGUES = {"Sens", "Fours", "Thann", "Verdun", "Toul"}
+    for ville, region in VILLE_VERS_REGION.items():
+        if ville in VILLES_AMBIGUES:
+            continue
+        if _cite(ville):
+            return region
 
     # 3. Zone par défaut de la source (ex. Paperjam -> Luxembourg), si elle
     # correspond déjà directement à l'une des régions suivies.
     zone_defaut = item.get("zone", "")
     if zone_defaut in REGIONS_CONNUES:
         return zone_defaut
-
-    # 4. Mention explicite du Luxembourg dans le texte.
-    if "luxembourg" in text_lower:
-        return "Luxembourg"
 
     return "AUTRES"
 
