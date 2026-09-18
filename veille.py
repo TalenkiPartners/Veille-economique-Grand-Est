@@ -282,11 +282,13 @@ SOURCES_REGIONALES = {
     "Le Journal des Entreprises (Grand Est)",
     "Traces Écrites News",
     "Point Éco Alsace",
-    "L'Est Républicain",
-    "Dernières Nouvelles d'Alsace",
     "Paperjam (Luxembourg)",
     "Delano (Luxembourg)",
 }
+# L'Est Républicain et les Dernières Nouvelles d'Alsace sont des quotidiens
+# généralistes (foot, radars, patrimoine, santé...), pas de la presse
+# économique spécialisée — ils gardent l'exigence de mot-clé sectoriel
+# classique, sans quoi ils noient la veille sous du hors-sujet.
 
 # Motifs typiques des pages non-éditoriales (offres d'emploi, fiches
 # produits du catalogue, pages de marque) qui polluent les flux des
@@ -297,6 +299,8 @@ MOTIFS_NON_EDITORIAUX = [
     r"^\s*[\w\s'’-]+ \| [\w\s'’.-]+$",      # "Produit | MARQUE"
     r"\b\d+\s?(mm|cm|m²|kg|A)\b",            # dimensions/caractéristiques produit
     r"\bréf(érence)?\.?\s?:", r"\bnormes? EN\b",
+    r"vie des sociétés", r"avis d.attribution", r"tribunal des activit",
+    r"\bMAPA\b", r"\blot \d+\b", r"marché public", r"appel d.offres public",
 ]
 
 # Flux RSS direct de L'essentiel (Luxembourg), rubrique économie.
