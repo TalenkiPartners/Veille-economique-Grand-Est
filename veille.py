@@ -185,9 +185,10 @@ SECTEURS = [
     "robotique", "automatisation", "maintenance industrielle",
     "bureau d'études", "forge", "emboutissage", "injection plastique",
     "ferroviaire", "construction navale", "spatial", "logistique industrielle",
-    "r&d", "recherche et développement", "bâtiment", "btp", "construction",
-    "travaux publics", "pharma", "pharmaceutique", "oil & gas", "pétrole",
-    "gaz naturel", "pétrochimie", "raffinage", "industrie lourde", "cimenterie",
+    "r&d", "recherche et développement", "pharma", "pharmaceutique",
+    "oil & gas", "pétrole", "gaz naturel", "pétrochimie", "raffinage",
+    "industrie lourde", "logistique", "supply chain", "chaîne d'approvisionnement",
+    "entrepôt", "plateforme logistique", "entreposage",
 ]
 
 # Entreprises-repères de l'industrie Grand Est : si l'une d'elles est citée,
@@ -200,7 +201,8 @@ ENTREPRISES_SURVEILLANCE = [
     "Liebherr", "Lohr", "Continental", "Faurecia", "Vitesco",
     "Safran", "Thales", "Air Liquide", "Solvay", "Arkema",
     "TotalEnergies", "GRTgaz", "EDF", "Bosch", "Sanofi", "Novartis",
-    "Vinci", "Bouygues", "Eiffage", "SNCF",
+    "Amazon", "XPO Logistics", "Geodis", "DB Schenker", "Kuehne+Nagel",
+    "FM Logistic", "DHL", "Dachser", "STEF", "ID Logistics",
 ]
 
 # Correspondance division NAF -> libellé de secteur affiché dans le mail.
@@ -223,7 +225,7 @@ NAF_LABELS = {
     "31": "Ameublement", "32": "Autres industries",
     "33": "Maintenance industrielle",
     "35": "Énergie",
-    "41": "Construction / bâtiment", "42": "Travaux publics", "43": "Construction / BTP",
+    "49": "Transport / logistique", "52": "Logistique / entreposage",
     "71": "Ingénierie / études techniques",
     "72": "R&D",
 }
@@ -264,6 +266,26 @@ SOURCES_NATIONALES = {
     "Industrie & Technologies",
     "Société.tech",
     "L'essentiel (Luxembourg)",
+}
+
+# Presse économique régionale : ces sources sont interrogées avec une
+# requête qui impose déjà un mot-clé thématique (rachat, recrutement,
+# investissement...) ET couvrent un territoire restreint. Un article qui
+# passe ces deux filtres est presque toujours pertinent, même si son titre
+# ne contient aucun mot-clé sectoriel générique — un article de presse dit
+# "Novasco Custines reprend le site", pas "entreprise industrielle". On
+# lève donc l'exigence de mot-clé sectoriel quand la région est confirmée
+# par le texte.
+SOURCES_REGIONALES = {
+    "Les Affiches d'Alsace et de Lorraine",
+    "La Semaine",
+    "Le Journal des Entreprises (Grand Est)",
+    "Traces Écrites News",
+    "Point Éco Alsace",
+    "L'Est Républicain",
+    "Dernières Nouvelles d'Alsace",
+    "Paperjam (Luxembourg)",
+    "Delano (Luxembourg)",
 }
 
 # Motifs typiques des pages non-éditoriales (offres d'emploi, fiches
@@ -437,8 +459,9 @@ def fetch_lessentiel(since):
 def naf_matches_cible(code_naf):
     """Vérifie si un code NAF appartient aux secteurs ciblés : industrie
     manufacturière (divisions 10 à 33, dont pharma=21, pétrochimie=19),
-    énergie (35), construction/bâtiment (41-43), ingénierie (71.12),
-    R&D (72), extraction oil & gas (06, 09).
+    énergie (35), logistique/entreposage (52) et fret (49.4x), ingénierie
+    (71.12), R&D (72), extraction oil & gas (06, 09). Le bâtiment/BTP/
+    construction (41-43) est explicitement exclu.
 
     Exclut explicitement l'artisanat alimentaire de détail (boulangerie,
     pâtisserie, boucherie, charcuterie...) : techniquement classé dans la
@@ -459,10 +482,12 @@ def naf_matches_cible(code_naf):
 
     if code.startswith("7112"):
         return True
+    if code.startswith("494"):  # 49.4x = transports routiers de fret (pas le transport de voyageurs)
+        return True
     division = code[:2]
     if division.isdigit():
         div_num = int(division)
-        if div_num in (6, 9, 35, 41, 42, 43, 72):
+        if div_num in (6, 9, 35, 52, 72):
             return True
         if 10 <= div_num <= 33:
             return True
@@ -495,20 +520,24 @@ def naf_to_secteur_label(code_naf):
     code = code_naf.replace(".", "").upper()
     if code.startswith("7112"):
         return NAF_LABELS["71"]
+    if code.startswith("494"):
+        return NAF_LABELS["49"]
     division = code[:2]
     return NAF_LABELS.get(division)
 
 
-def lookup_naf(company_name, cache):
-    """Cherche le code NAF réel d'une entreprise par son nom via l'API
-    Recherche d'Entreprises (registre SIRENE, officielle, gratuite, sans
-    clé). Mis en cache pour éviter les appels répétés dans une même
-    exécution si la même entreprise revient plusieurs fois."""
+def _lookup_record(company_name, cache):
+    """Cherche l'enregistrement complet d'une entreprise par son nom via
+    l'API Recherche d'Entreprises (registre SIRENE, officielle, gratuite,
+    sans clé). Mis en cache pour éviter les appels répétés dans une même
+    exécution si la même entreprise revient plusieurs fois. Le cache est
+    partagé entre lookup_naf() et lookup_effectif_min() pour ne faire
+    qu'un seul appel réseau par entreprise."""
     key = company_name.strip().lower()
     if key in cache:
         return cache[key]
 
-    naf = None
+    record = None
     try:
         resp = requests.get(
             RECHERCHE_ENTREPRISES_API,
@@ -519,12 +548,48 @@ def lookup_naf(company_name, cache):
         data = resp.json()
         results = data.get("results", [])
         if results:
-            naf = (results[0].get("siege", {}) or {}).get("activite_principale")
+            record = results[0]
     except Exception as exc:  # noqa: BLE001
-        print(f"[warn] échec lookup NAF pour '{company_name}': {exc}", file=sys.stderr)
+        print(f"[warn] échec recherche entreprise pour '{company_name}': {exc}", file=sys.stderr)
 
-    cache[key] = naf
-    return naf
+    cache[key] = record
+    return record
+
+
+def lookup_naf(company_name, cache):
+    """Code NAF réel d'une entreprise, via _lookup_record()."""
+    record = _lookup_record(company_name, cache)
+    if not record:
+        return None
+    return (record.get("siege", {}) or {}).get("activite_principale")
+
+
+# Tranches d'effectif INSEE (code -> borne basse). Champ non garanti sur
+# cette API publique : une entreprise sans effectif connu n'est jamais
+# exclue pour autant, faute de pouvoir vérifier (voir lookup_effectif_min).
+CODES_EFFECTIF = {
+    "00": 0, "01": 1, "02": 3, "03": 6, "11": 10, "12": 20, "21": 50,
+    "22": 100, "31": 200, "32": 250, "41": 500, "42": 1000, "51": 2000,
+    "52": 5000, "53": 10000,
+}
+
+
+def lookup_effectif_min(company_name, cache):
+    """Borne basse de la tranche d'effectif salarié d'une entreprise, ou
+    None si l'information n'est pas disponible dans le registre (auquel
+    cas l'appelant doit considérer l'entreprise comme non-exclue plutôt que
+    hors cible)."""
+    record = _lookup_record(company_name, cache)
+    if not record:
+        return None
+    tranche = record.get("tranche_effectif_salarie") or (record.get("siege", {}) or {}).get("tranche_effectif_salarie")
+    if tranche is None:
+        return None
+    if isinstance(tranche, dict):
+        if tranche.get("de") is not None:
+            return tranche["de"]
+        tranche = tranche.get("code")
+    return CODES_EFFECTIF.get(str(tranche))
 
 
 def collect(mode):
@@ -614,8 +679,18 @@ def _filter_sector(items):
             if looks_like_individual(entreprise):
                 continue
             naf = lookup_naf(entreprise, naf_cache)
-            if naf_matches_cible(naf):
-                kept.append(item)
+            if not naf_matches_cible(naf):
+                continue
+            # Seuil de taille : on vise les structures significatives (>100
+            # salariés). Le CA n'est pas disponible gratuitement, donc pas
+            # vérifiable ici. Une entreprise sans effectif connu dans le
+            # registre n'est PAS exclue pour autant — impossible de
+            # confirmer qu'elle est trop petite, donc on la garde par
+            # défaut plutôt que de risquer de perdre un vrai signal.
+            effectif = lookup_effectif_min(entreprise, naf_cache)
+            if effectif is not None and effectif < 100:
+                continue
+            kept.append(item)
             continue
 
         entreprise_citee = next(
@@ -642,8 +717,18 @@ def _filter_sector(items):
         # zone en dur, ou aux sources régionales). Sans cette contrainte,
         # elles déversent tout leur flux national. On exige donc que
         # l'article soit rattachable à l'une des régions suivies.
+        texte_brut = f"{item['title']} {item['summary']}".lower()
+
         if item["source"] in SOURCES_NATIONALES:
-            if classify_region(item, f"{item['title']} {item['summary']}".lower()) == "AUTRES":
+            if classify_region(item, texte_brut, texte_seul=True) == "AUTRES":
+                continue
+
+        # Presse régionale déjà filtrée par thème à la requête : si la
+        # région est confirmée par le texte, on garde sans exiger en plus
+        # un mot-clé sectoriel dans le titre.
+        if item["source"] in SOURCES_REGIONALES:
+            if classify_region(item, texte_brut, texte_seul=True) != "AUTRES":
+                kept.append(item)
                 continue
 
         if any(sect in text_lower for sect in SECTEURS):
@@ -652,7 +737,7 @@ def _filter_sector(items):
     return kept
 
 
-def classify_region(item, text_lower):
+def classify_region(item, text_lower, texte_seul=False):
     """Classe un article dans l'une des régions suivies (Lorraine, Alsace,
     Champagne-Ardenne, Franche-Comté, Bourgogne, Luxembourg), ou AUTRES si
     aucun indice de localisation n'est trouvé.
@@ -699,10 +784,14 @@ def classify_region(item, text_lower):
             return region
 
     # 3. Zone par défaut de la source (ex. Paperjam -> Luxembourg), si elle
-    # correspond déjà directement à l'une des régions suivies.
-    zone_defaut = item.get("zone", "")
-    if zone_defaut in REGIONS_CONNUES:
-        return zone_defaut
+    # correspond déjà directement à l'une des régions suivies. Ignoré quand
+    # texte_seul=True : pour une source nationale, ce repli validerait
+    # n'importe quel article international (L'essentiel a "Luxembourg" en
+    # zone par défaut, ce qui laissait passer tout son flux mondial).
+    if not texte_seul:
+        zone_defaut = item.get("zone", "")
+        if zone_defaut in REGIONS_CONNUES:
+            return zone_defaut
 
     return "AUTRES"
 
@@ -859,7 +948,7 @@ def render_html(items, mode):
 </head>
 <body>
   <h1>Veille économique — Grand Est & Luxembourg
-    <span class="sub">{title} · industrie / ingénierie / énergie / bâtiment / R&amp;D · {today}</span>
+    <span class="sub">{title} · industrie / ingénierie / énergie / supply chain / R&amp;D · {today}</span>
   </h1>
   {body}
   <footer>Généré automatiquement · sources : Google News, BODACC, registre SIRENE</footer>
