@@ -741,6 +741,36 @@ def _filter_sector(items):
     return kept
 
 
+def detect_lieu(item, text_lower):
+    """Ville précise citée dans le texte, pour affichage détaillé en plus
+    de la région (ex. 'Nancy' plutôt que juste 'Lorraine'). Retourne None
+    si aucune ville n'est identifiée."""
+    import re as _re
+
+    def _cite(nom):
+        return _re.search(rf"(?<![\w-]){_re.escape(nom.lower())}(?![\w-])", text_lower)
+
+    VILLES_AMBIGUES = {"Sens", "Fours", "Thann", "Verdun", "Toul"}
+    for ville in VILLE_VERS_REGION:
+        if ville in VILLES_AMBIGUES:
+            continue
+        if _cite(ville):
+            return ville
+
+    # Repli : nom de département/région cité en toutes lettres.
+    for nom in NOM_TERRITOIRE_VERS_REGION:
+        if nom not in REGIONS_CONNUES and _cite(nom):
+            return nom
+
+    # Dernier repli BODACC : ville du champ source, même si elle n'est pas
+    # dans la liste ci-dessus (petites communes non répertoriées).
+    ville_source = item.get("zone", "")
+    if ville_source and ville_source not in REGIONS_CONNUES and not ville_source.isdigit():
+        return ville_source
+
+    return None
+
+
 def classify_region(item, text_lower, texte_seul=False):
     """Classe un article dans l'une des régions suivies (Lorraine, Alsace,
     Champagne-Ardenne, Franche-Comté, Bourgogne, Luxembourg), ou AUTRES si
@@ -812,8 +842,9 @@ def _enrich(items):
         text = f"{item['title']} {item['summary']}"
         text_lower = text.lower()
 
-        # --- Région affichée ---
+        # --- Région affichée + lieu précis ---
         item["zone_affichee"] = classify_region(item, text_lower)
+        item["lieu_detail"] = detect_lieu(item, text_lower)
 
         # --- Secteur affiché ---
         secteur = None
@@ -905,23 +936,33 @@ def render_html(items, mode):
     sections = []
     for zone in zones_ordonnees:
         zone_items = by_zone[zone]
-        rows = []
+        cards = []
         for item in zone_items:
             date_str = item["published"].strftime("%d/%m") if item["published"] else ""
-            rows.append(f"""
-            <li>
-              <span class="date">{date_str}</span>
-              <a href="{html.escape(item['link'])}" target="_blank">{html.escape(item['title'])}</a>
-              <span class="tags">
-                <span class="tag secteur">{html.escape(item.get('secteur_affiche', 'Non déterminé'))}</span>
-                <span class="tag theme">{html.escape(item['theme'])}</span>
-              </span>
-              <span class="source">— {html.escape(item['source'])}</span>
-            </li>""")
+            lieu = item.get("lieu_detail")
+            extrait = (item.get("summary") or "").strip()
+            if len(extrait) > 280:
+                extrait = extrait[:277].rsplit(" ", 1)[0] + "…"
+
+            badges = []
+            if lieu:
+                badges.append(f'<span class="badge lieu">{html.escape(lieu)}</span>')
+            badges.append(f'<span class="badge secteur">{html.escape(item.get("secteur_affiche", "Non déterminé"))}</span>')
+            badges.append(f'<span class="badge theme">{html.escape(item["theme"])}</span>')
+
+            extrait_html = f'<p class="blurb">{html.escape(extrait)}</p>' if extrait else ""
+
+            cards.append(f"""
+            <article class="card">
+              <a class="headline" href="{html.escape(item['link'])}" target="_blank">{html.escape(item['title'])}</a>
+              {extrait_html}
+              <div class="badges">{''.join(badges)}</div>
+              <div class="meta">{date_str + " · " if date_str else ""}{html.escape(item['source'])}</div>
+            </article>""")
         sections.append(f"""
         <section>
           <h2>{html.escape(zone)} <span class="count">({len(zone_items)})</span></h2>
-          <ul>{''.join(rows)}</ul>
+          {''.join(cards)}
         </section>""")
 
     body = "".join(sections) if sections else "<p>Rien de significatif détecté sur cette période.</p>"
@@ -936,18 +977,18 @@ def render_html(items, mode):
   body {{ font-family: -apple-system, Segoe UI, Roboto, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #1a1a1a; background: #fafafa; }}
   h1 {{ font-size: 1.4em; border-bottom: 2px solid #1a1a1a; padding-bottom: 8px; }}
   h1 .sub {{ display: block; font-size: 0.6em; font-weight: normal; color: #666; margin-top: 4px; }}
-  h2 {{ font-size: 1.05em; margin-top: 28px; color: #b5651d; }}
-  .count {{ color: #999; font-weight: normal; font-size: 0.85em; }}
-  ul {{ list-style: none; padding: 0; }}
-  li {{ padding: 8px 0; border-bottom: 1px solid #e5e5e5; }}
-  .date {{ color: #999; font-size: 0.85em; margin-right: 8px; }}
-  .tags {{ display: block; margin: 4px 0 2px; }}
-  .tag {{ display: inline-block; font-size: 0.72em; padding: 1px 7px; border-radius: 10px; margin-right: 6px; }}
-  .tag.secteur {{ background: #eadfce; color: #6b4f1d; }}
-  .tag.theme {{ background: #e2e8ee; color: #35506b; }}
-  .source {{ color: #999; font-size: 0.85em; }}
-  a {{ color: #1a1a1a; text-decoration: none; }}
-  a:hover {{ text-decoration: underline; }}
+  h2 {{ font-size: 1.1em; margin-top: 30px; color: #fff; background: #b5651d; padding: 6px 12px; border-radius: 4px; }}
+  .count {{ font-weight: normal; font-size: 0.8em; opacity: 0.85; }}
+  .card {{ background: #fff; border: 1px solid #e5e5e5; border-radius: 6px; padding: 14px 16px; margin-top: 10px; }}
+  .headline {{ display: block; font-weight: 700; font-size: 1em; color: #1a1a1a; text-decoration: none; line-height: 1.35; }}
+  .headline:hover {{ text-decoration: underline; }}
+  .blurb {{ font-size: 0.88em; color: #444; margin: 6px 0 0; line-height: 1.45; }}
+  .badges {{ margin-top: 10px; }}
+  .badge {{ display: inline-block; font-size: 0.68em; font-weight: 600; text-transform: uppercase; letter-spacing: 0.02em; padding: 2px 8px; border-radius: 10px; margin-right: 6px; margin-bottom: 4px; }}
+  .badge.lieu {{ background: #1a1a1a; color: #fff; }}
+  .badge.secteur {{ background: #eadfce; color: #6b4f1d; }}
+  .badge.theme {{ background: #e2e8ee; color: #35506b; }}
+  .meta {{ color: #999; font-size: 0.78em; margin-top: 8px; }}
   footer {{ margin-top: 40px; font-size: 0.8em; color: #999; }}</style>
 </head>
 <body>
